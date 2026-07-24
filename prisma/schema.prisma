@@ -1,0 +1,362 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  importFileExtension    = ""
+  generatedFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Auth ----------
+
+enum Role {
+  ADMIN
+  FORMATEUR
+  ETUDIANT
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  name               String
+  email              String    @unique
+  passwordHash       String
+  role               Role      @default(ETUDIANT)
+  image              String?
+  bio                String?
+  formateurApproved  Boolean   @default(false)
+  emailVerified      DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  coursesCreated Course[]        @relation("CourseFormateur")
+  blogPosts      BlogPost[]
+  enrollments    Enrollment[]
+  quizAttempts   QuizAttempt[]
+  certificates   Certificate[]
+  emailLogs      EmailLog[]
+  payments       Payment[]
+}
+
+// Standard Auth.js (NextAuth) adapter tables — kept for future OAuth/magic-link providers.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------- Contenu / Blog ----------
+
+model Category {
+  id   String @id @default(cuid())
+  name String @unique
+  slug String @unique
+
+  blogPosts BlogPost[]
+  courses   Course[]
+}
+
+model BlogPost {
+  id         String   @id @default(cuid())
+  title      String
+  slug       String   @unique
+  excerpt    String
+  content    String   @db.Text
+  coverImage String?
+  published  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  authorId   String
+  author     User      @relation(fields: [authorId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+}
+
+// ---------- E-learning ----------
+
+enum CourseLevel {
+  DEBUTANT
+  INTERMEDIAIRE
+  AVANCE
+}
+
+model Course {
+  id          String      @id @default(cuid())
+  title       String
+  slug        String      @unique
+  description String      @db.Text
+  coverImage  String?
+  level       CourseLevel @default(DEBUTANT)
+  published   Boolean     @default(false)
+  price       Int         @default(0) // Prix en FCFA (XOF). 0 = formation gratuite.
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  formateurId String
+  formateur   User      @relation("CourseFormateur", fields: [formateurId], references: [id])
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  modules     Module[]
+  enrollments Enrollment[]
+  quizzes     Quiz[]
+  certificates Certificate[]
+  payments    Payment[]
+}
+
+model Module {
+  id       String @id @default(cuid())
+  title    String
+  order    Int
+
+  courseId String
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons  Lesson[]
+}
+
+enum LessonType {
+  VIDEO
+  PDF
+  TEXTE
+}
+
+model Lesson {
+  id       String     @id @default(cuid())
+  title    String
+  order    Int
+  type     LessonType @default(TEXTE)
+  videoUrl String?
+  pdfUrl   String?
+  content  String?    @db.Text
+  duration Int? // minutes
+
+  moduleId String
+  module   Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  progress LessonProgress[]
+}
+
+model Enrollment {
+  id          String    @id @default(cuid())
+  progress    Float     @default(0) // 0-100
+  enrolledAt  DateTime  @default(now())
+  completedAt DateTime?
+
+  userId   String
+  user     User             @relation(fields: [userId], references: [id])
+  courseId String
+  course   Course           @relation(fields: [courseId], references: [id])
+  lessons  LessonProgress[]
+
+  @@unique([userId, courseId])
+}
+
+model LessonProgress {
+  id          String    @id @default(cuid())
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  enrollmentId String
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lessonId     String
+  lesson       Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([enrollmentId, lessonId])
+}
+
+model Quiz {
+  id            String @id @default(cuid())
+  title         String
+  passingScore  Int    @default(70) // %
+
+  courseId  String
+  course    Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  questions Question[]
+  attempts  QuizAttempt[]
+}
+
+model Question {
+  id    String @id @default(cuid())
+  text  String
+  order Int
+
+  quizId  String
+  quiz    Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  choices Choice[]
+}
+
+model Choice {
+  id        String  @id @default(cuid())
+  text      String
+  isCorrect Boolean @default(false)
+
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+model QuizAttempt {
+  id          String   @id @default(cuid())
+  score       Float
+  passed      Boolean
+  answers     Json
+  attemptedAt DateTime @default(now())
+
+  quizId String
+  quiz   Quiz   @relation(fields: [quizId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model Certificate {
+  id                String   @id @default(cuid())
+  certificateNumber String   @unique
+  issuedAt          DateTime @default(now())
+  pdfUrl            String?
+
+  userId   String
+  user     User   @relation(fields: [userId], references: [id])
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+}
+
+// ---------- Bibliothèque HSE ----------
+
+enum DocumentCategory {
+  PROCEDURE
+  TOOLBOX_MEETING
+  JSA_JHA
+  PLAN_URGENCE
+  CHECKLIST
+  NORME_ISO
+  AFFICHE
+  RAPPORT_ACCIDENT
+  AUTRE
+}
+
+model Document {
+  id           String           @id @default(cuid())
+  title        String
+  description  String?
+  category     DocumentCategory
+  fileUrl      String
+  downloadable Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+}
+
+// ---------- Croissance / Marketing ----------
+
+enum SubscriberSource {
+  FOOTER
+  BLOG
+  ACCUEIL
+}
+
+model NewsletterSubscriber {
+  id         String           @id @default(cuid())
+  email      String           @unique
+  source     SubscriberSource
+  subscribedAt DateTime       @default(now())
+}
+
+// Journal des emails automatisés envoyés, pour garantir l'idempotence des
+// relances : un même utilisateur ne reçoit jamais deux fois le même type
+// de relance, même si le cron tourne plusieurs fois ou rattrape un jour manqué.
+enum EmailType {
+  ACTIVATION_NUDGE
+  INACTIVITY_NUDGE
+}
+
+model EmailLog {
+  id     String    @id @default(cuid())
+  userId String
+  type   EmailType
+  // Clé de contexte optionnelle (ex: id d'inscription) pour distinguer
+  // plusieurs relances du même type liées à des objets différents.
+  contextId String?
+  sentAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, contextId])
+}
+
+// ---------- Paiement ----------
+
+// Fournisseur de paiement. STRIPE couvre les cartes bancaires internationales ;
+// MOBILE_MONEY est prévu pour Orange Money / MTN MoMo / Moov / Wave (à intégrer
+// via un agrégateur type CinetPay ou PayDunya lorsque les comptes seront ouverts).
+enum PaymentProvider {
+  STRIPE
+  ORANGE_MONEY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// Transaction d'achat d'une formation payante. Une inscription (Enrollment)
+// n'est créée pour une formation payante qu'une fois le paiement PAID.
+model Payment {
+  id          String          @id @default(cuid())
+  amount      Int             // Montant en francs guinéens (GNF)
+  currency    String          @default("GNF")
+  provider    PaymentProvider @default(ORANGE_MONEY)
+  status      PaymentStatus   @default(PENDING)
+  // Référence côté fournisseur (ex: id de session Stripe Checkout) pour
+  // réconcilier le webhook avec la transaction locale.
+  providerRef String?         @unique
+  // Paiement Mobile Money (Orange Money) : numéro de l'expéditeur et
+  // référence de transaction saisis par l'apprenant, vérifiés par l'admin.
+  payerPhone  String?
+  reference   String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  userId   String
+  user     User   @relation(fields: [userId], references: [id])
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id])
+
+  @@index([userId, courseId])
+}
